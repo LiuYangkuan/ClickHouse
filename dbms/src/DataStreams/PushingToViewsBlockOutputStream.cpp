@@ -1,6 +1,6 @@
 #include "PushingToViewsBlockOutputStream.h"
 #include <Storages/MergeTree/ReplicatedMergeTreeBlockOutputStream.h>
-
+#include <Parsers/ASTInsertQuery.h>
 
 namespace DB
 {
@@ -33,7 +33,15 @@ PushingToViewsBlockOutputStream::PushingToViewsBlockOutputStream(String database
         auto & materialized_view = dynamic_cast<const StorageMaterializedView &>(*dependent_table);
 
         auto query = materialized_view.getInnerQuery();
-        auto out = std::make_shared<PushingToViewsBlockOutputStream>(database_table.first, database_table.second, *views_context, ASTPtr());
+        auto target = materialized_view.getTargetTable();
+        ASTPtr ast_ptr = ASTPtr();
+        if(target->getName() == "Distributed"){
+           auto insert = std::make_shared<ASTInsertQuery>();
+           insert->select = query;
+           ast_ptr = insert;
+        }
+        
+        auto out = std::make_shared<PushingToViewsBlockOutputStream>(database_table.first, database_table.second, *views_context, ast_ptr);
 
         views.emplace_back(ViewInfo{std::move(query), database_table.first, database_table.second, std::move(out)});
     }

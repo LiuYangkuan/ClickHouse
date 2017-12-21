@@ -143,7 +143,7 @@ static Names extractColumnNames(const ASTPtr & node)
   *     </default>
   * </graphite_rollup>
   */
-static void appendGraphitePattern(const Context & context,
+static void appendGraphitePattern(
     const Poco::Util::AbstractConfiguration & config, const String & config_element, Graphite::Patterns & patterns)
 {
     Graphite::Pattern pattern;
@@ -216,7 +216,7 @@ static void setGraphitePatternsFromConfig(const Context & context,
     {
         if (startsWith(key, "pattern"))
         {
-            appendGraphitePattern(context, config, config_element + "." + key, params.patterns);
+            appendGraphitePattern(config, config_element + "." + key, params.patterns);
         }
         else if (key == "default")
         {
@@ -234,7 +234,7 @@ static void setGraphitePatternsFromConfig(const Context & context,
     }
 
     if (config.has(config_element + ".default"))
-        appendGraphitePattern(context, config, config_element + "." + ".default", params.patterns);
+        appendGraphitePattern(config, config_element + "." + ".default", params.patterns);
 }
 
 
@@ -242,7 +242,7 @@ static void setGraphitePatternsFromConfig(const Context & context,
 static void checkAllTypesAreAllowedInTable(const NamesAndTypesList & names_and_types)
 {
     for (const auto & elem : names_and_types)
-        if (elem.type->notForTables())
+        if (elem.type->cannotBeStoredInTables())
             throw Exception("Data type " + elem.type->getName() + " cannot be used in tables", ErrorCodes::DATA_TYPE_CANNOT_BE_USED_IN_TABLES);
 }
 
@@ -656,7 +656,7 @@ StoragePtr StorageFactory::get(
 
             auto type = block.getByPosition(0).type;
 
-            if (!type->isNumeric())
+            if (!type->isValueRepresentedByInteger())
                 throw Exception("Sharding expression has type " + type->getName() +
                     ", but should be one of integer type", ErrorCodes::TYPE_MISMATCH);
         }
@@ -717,10 +717,10 @@ StoragePtr StorageFactory::get(
           * - Schema (optional, if the format supports it)
           */
 
-        if (!args_ptr || !(args_ptr->size() == 4 || args_ptr->size() == 5))
+        if (!args_ptr || args_ptr->size() < 3 || args_ptr->size() > 6)
             throw Exception(
-                "Storage Kafka requires 4 parameters"
-                " - Kafka broker list, list of topics to consume, consumer group ID, message format",
+                "Storage Kafka requires 3-6 parameters"
+                " - Kafka broker list, list of topics to consume, consumer group ID, message format, schema, number of consumers",
                 ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
         ASTs & args = *args_ptr;
 
@@ -735,12 +735,28 @@ StoragePtr StorageFactory::get(
         args[2] = evaluateConstantExpressionOrIdentifierAsLiteral(args[2], local_context);
         args[3] = evaluateConstantExpressionOrIdentifierAsLiteral(args[3], local_context);
 
-        // Additionally parse schema if supported
+        // Parse format schema if supported (optional)
         String schema;
-        if (args.size() == 5)
+        if (args.size() >= 5)
         {
             args[4] = evaluateConstantExpressionOrIdentifierAsLiteral(args[4], local_context);
-            schema = static_cast<const ASTLiteral &>(*args[4]).value.safeGet<String>();
+
+            auto ast = typeid_cast<ASTLiteral *>(&*args[4]);
+            if (ast && ast->value.getType() == Field::Types::String)
+                schema = safeGet<String>(ast->value);
+            else
+                throw Exception("Format schema must be a string", ErrorCodes::BAD_ARGUMENTS);
+        }
+
+        // Parse number of consumers (optional)
+        UInt64 num_consumers = 1;
+        if (args.size() >= 6)
+        {
+            auto ast = typeid_cast<ASTLiteral *>(&*args[5]);
+            if (ast && ast->value.getType() == Field::Types::UInt64)
+                num_consumers = safeGet<UInt64>(ast->value);
+            else
+                throw Exception("Number of consumers must be a positive integer", ErrorCodes::BAD_ARGUMENTS);
         }
 
         // Parse topic list and consumer group
@@ -754,14 +770,14 @@ StoragePtr StorageFactory::get(
         if (ast && ast->value.getType() == Field::Types::String)
             format = safeGet<String>(ast->value);
         else
-            throw Exception(String("Format must be a string"), ErrorCodes::BAD_ARGUMENTS);
+            throw Exception("Format must be a string", ErrorCodes::BAD_ARGUMENTS);
 
         return StorageKafka::create(
             table_name, database_name, context, columns,
             materialized_columns, alias_columns, column_defaults,
-            brokers, group, topics, format, schema);
+            brokers, group, topics, format, schema, num_consumers);
 #else
-            throw Exception{"Storage `Kafka` disabled because ClickHouse built without kafka support.", ErrorCodes::SUPPORT_IS_DISABLED};
+            throw Exception("Storage `Kafka` disabled because ClickHouse built without Kafka support.", ErrorCodes::SUPPORT_IS_DISABLED);
 #endif
     }
     else if (endsWith(name, "MergeTree"))
@@ -790,13 +806,15 @@ StoragePtr StorageFactory::get(
           * GraphiteMergeTree(date, [sample_key], primary_key, index_granularity, 'config_element')
           * UnsortedMergeTree(date, index_granularity)  TODO Add description below.
           *
-          * Alternatively, if experimental_allow_extended_storage_definition_syntax setting is specified,
-          * you can specify:
+          * Alternatively, you can specify:
           *  - Partitioning expression in the PARTITION BY clause;
           *  - Primary key in the ORDER BY clause;
           *  - Sampling expression in the SAMPLE BY clause;
           *  - Additional MergeTreeSettings in the SETTINGS clause;
           */
+
+        bool is_extended_storage_def =
+            storage_def.partition_by || storage_def.order_by || storage_def.sample_by || storage_def.settings;
 
         String name_part = name.substr(0, name.size() - strlen("MergeTree"));
 
@@ -806,9 +824,6 @@ StoragePtr StorageFactory::get(
 
         MergeTreeData::MergingParams merging_params;
         merging_params.mode = MergeTreeData::MergingParams::Ordinary;
-
-        const bool allow_extended_storage_def =
-            attach || local_context.getSettingsRef().experimental_allow_extended_storage_definition_syntax;
 
         if (name_part == "Collapsing")
             merging_params.mode = MergeTreeData::MergingParams::Collapsing;
@@ -824,7 +839,7 @@ StoragePtr StorageFactory::get(
             merging_params.mode = MergeTreeData::MergingParams::Graphite;
         else if (!name_part.empty())
             throw Exception(
-                "Unknown storage " + name + getMergeTreeVerboseHelp(allow_extended_storage_def),
+                "Unknown storage " + name + getMergeTreeVerboseHelp(is_extended_storage_def),
                 ErrorCodes::UNKNOWN_STORAGE);
 
         ASTs args;
@@ -832,14 +847,6 @@ StoragePtr StorageFactory::get(
             args = *args_ptr;
 
         /// NOTE Quite complicated.
-
-        bool is_extended_storage_def =
-            storage_def.partition_by || storage_def.order_by || storage_def.sample_by || storage_def.settings;
-
-        if (is_extended_storage_def && !allow_extended_storage_def)
-            throw Exception(
-                "Extended storage definition syntax (PARTITION BY, ORDER BY, SAMPLE BY and SETTINGS clauses) "
-                "is disabled. Enable it with experimental_allow_extended_storage_definition_syntax user setting");
 
         size_t min_num_params = 0;
         size_t max_num_params = 0;
@@ -870,7 +877,7 @@ StoragePtr StorageFactory::get(
         {
             if (merging_params.mode == MergeTreeData::MergingParams::Unsorted)
             {
-                if (args.size() == min_num_params && allow_extended_storage_def)
+                if (args.size() == min_num_params)
                     is_extended_storage_def = true;
                 else
                 {

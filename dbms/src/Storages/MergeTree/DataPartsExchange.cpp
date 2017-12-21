@@ -45,7 +45,7 @@ std::string Service::getId(const std::string & node_id) const
     return getEndpointId(node_id);
 }
 
-void Service::processQuery(const Poco::Net::HTMLForm & params, ReadBuffer & body, WriteBuffer & out, Poco::Net::HTTPServerResponse & response)
+void Service::processQuery(const Poco::Net::HTMLForm & params, ReadBuffer & /*body*/, WriteBuffer & out, Poco::Net::HTTPServerResponse & response)
 {
     if (blocker.isCancelled())
         throw Exception("Transferring part to replica was cancelled", ErrorCodes::ABORTED);
@@ -141,9 +141,10 @@ void Service::processQuery(const Poco::Net::HTMLForm & params, ReadBuffer & body
 
 MergeTreeData::DataPartPtr Service::findPart(const String & name)
 {
-    /// It is important to include PreCommitted parts here
-    /// Because part could be actually committed into ZooKeeper, but response from ZooKeeper to the server could be delayed
-    auto part = data.getPartIfExists(name, {MergeTreeDataPart::State::PreCommitted, MergeTreeDataPart::State::Committed});
+    /// It is important to include PreCommitted and Outdated parts here because remote replicas cannot reliably
+    /// determine the local state of the part, so queries for the parts in these states are completely normal.
+    auto part = data.getPartIfExists(
+        name, {MergeTreeDataPartState::PreCommitted, MergeTreeDataPartState::Committed, MergeTreeDataPartState::Outdated});
     if (part)
         return part;
 

@@ -6,6 +6,7 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <Common/Exception.h>
 #include <Common/setThreadName.h>
+#include <Common/typeid_cast.h>
 #include <DataStreams/FormatFactory.h>
 #include <DataStreams/IProfilingBlockInputStream.h>
 #include <DataStreams/LimitBlockInputStream.h>
@@ -13,10 +14,13 @@
 #include <DataStreams/copyData.h>
 #include <Interpreters/Context.h>
 #include <Interpreters/InterpreterInsertQuery.h>
+#include <Interpreters/evaluateConstantExpression.h>
 #include <Parsers/ASTExpressionList.h>
 #include <Parsers/ASTIdentifier.h>
 #include <Parsers/ASTInsertQuery.h>
+#include <Parsers/ASTLiteral.h>
 #include <Storages/StorageKafka.h>
+#include <Storages/StorageFactory.h>
 #include <common/logger_useful.h>
 
 #if __has_include(<rdkafka.h>) // maybe bundled
@@ -33,9 +37,10 @@ namespace ErrorCodes
     extern const int INCORRECT_DATA;
     extern const int UNKNOWN_EXCEPTION;
     extern const int CANNOT_READ_FROM_ISTREAM;
-    extern const int SUPPORT_IS_DISABLED;
     extern const int INVALID_CONFIG_PARAMETER;
     extern const int LOGICAL_ERROR;
+    extern const int BAD_ARGUMENTS;
+    extern const int NUMBER_OF_ARGUMENTS_DOESNT_MATCH;
 }
 
 using namespace Poco::Util;
@@ -52,6 +57,7 @@ class ReadBufferFromKafkaConsumer : public ReadBuffer
     rd_kafka_t * consumer;
     rd_kafka_message_t * current;
     Poco::Logger * log;
+    size_t read_messages;
 
     bool nextImpl() override
     {
@@ -82,6 +88,7 @@ class ReadBufferFromKafkaConsumer : public ReadBuffer
         // If an exception is thrown before that would occur, the client will rejoin without comitting offsets
         BufferBase::set(reinterpret_cast<char *>(msg->payload), msg->len, 0);
         current = msg;
+        ++read_messages;
         return true;
     }
 
@@ -96,9 +103,22 @@ class ReadBufferFromKafkaConsumer : public ReadBuffer
 
 public:
     ReadBufferFromKafkaConsumer(rd_kafka_t * consumer_, Poco::Logger * log_)
-        : ReadBuffer(nullptr, 0), consumer(consumer_), current(nullptr), log(log_) {}
+        : ReadBuffer(nullptr, 0), consumer(consumer_), current(nullptr), log(log_), read_messages(0) {}
 
     ~ReadBufferFromKafkaConsumer() { reset(); }
+
+    /// Commit messages read with this consumer
+    void commit() {
+        LOG_TRACE(log, "Committing " << read_messages << " messages");
+        if (read_messages == 0)
+            return;
+
+        auto err = rd_kafka_commit(consumer, NULL, 1 /* async */);
+        if (err)
+            throw Exception("Failed to commit offsets: " + String(rd_kafka_err2str(err)), ErrorCodes::UNKNOWN_EXCEPTION);
+
+        read_messages = 0;
+    }
 };
 
 class KafkaBlockInputStream : public IProfilingBlockInputStream
@@ -166,10 +186,8 @@ public:
     {
         reader->readSuffix();
 
-        // Store offsets read in this stream asynchronously
-        auto err = rd_kafka_commit(consumer->stream, NULL, 1 /* async */);
-        if (err)
-            throw Exception("Failed to commit offsets: " + String(rd_kafka_err2str(err)), ErrorCodes::UNKNOWN_EXCEPTION);
+        // Store offsets read in this stream
+        read_buf->commit();
 
         // Mark as successfully finished
         finalized = true;
@@ -204,7 +222,7 @@ StorageKafka::StorageKafka(
     const std::string & table_name_,
     const std::string & database_name_,
     Context & context_,
-    NamesAndTypesListPtr columns_,
+    const NamesAndTypesList & columns_,
     const NamesAndTypesList & materialized_columns_,
     const NamesAndTypesList & alias_columns_,
     const ColumnDefaults & column_defaults_,
@@ -245,6 +263,7 @@ BlockInputStreams StorageKafka::read(
         if (consumer == nullptr)
             break;
 
+        // Use block size of 1, otherwise LIMIT won't work properly as it will buffer excess messages in the last block
         streams.push_back(std::make_shared<KafkaBlockInputStream>(*this, consumer, context, schema_name, 1));
     }
 
@@ -376,7 +395,7 @@ void StorageKafka::pushConsumer(StorageKafka::ConsumerPtr c)
 
 void StorageKafka::streamThread()
 {
-    setThreadName("KafkaStreamThread");
+    setThreadName("KafkaStreamThr");
 
     while (!stream_cancelled)
     {
@@ -430,17 +449,18 @@ void StorageKafka::streamToViews()
     for (size_t i = 0; i < num_consumers; ++i)
     {
         auto consumer = claimConsumer();
-        streams.push_back(std::make_shared<KafkaBlockInputStream>(*this, consumer, context, schema_name, block_size));
+        auto stream = std::make_shared<KafkaBlockInputStream>(*this, consumer, context, schema_name, block_size);
+        streams.push_back(stream);
+
+        // Limit read batch to maximum block size to allow DDL
+        IProfilingBlockInputStream::LocalLimits limits;
+        limits.max_execution_time = settings.stream_flush_interval_ms;
+        limits.timeout_overflow_mode = OverflowMode::BREAK;
+        if (IProfilingBlockInputStream * p_stream = dynamic_cast<IProfilingBlockInputStream *>(stream.get()))
+            p_stream->setLimits(limits);
     }
 
     auto in = std::make_shared<UnionBlockInputStream<>>(streams, nullptr, num_consumers);
-
-    // Limit read batch to maximum block size to allow DDL
-    IProfilingBlockInputStream::LocalLimits limits;
-    limits.max_execution_time = settings.stream_flush_interval_ms;
-    limits.timeout_overflow_mode = OverflowMode::BREAK;
-    if (IProfilingBlockInputStream * p_stream = dynamic_cast<IProfilingBlockInputStream *>(in.get()))
-        p_stream->setLimits(limits);
 
     // Execute the query
     InterpreterInsertQuery interpreter{insert, context};
@@ -502,6 +522,82 @@ void StorageKafka::Consumer::unsubscribe()
 {
     if (stream != nullptr)
         rd_kafka_unsubscribe(stream);
+}
+
+
+void registerStorageKafka(StorageFactory & factory)
+{
+    factory.registerStorage("Kafka", [](const StorageFactory::Arguments & args)
+    {
+        ASTs & engine_args = args.engine_args;
+
+        /** Arguments of engine is following:
+          * - Kafka broker list
+          * - List of topics
+          * - Group ID (may be a constaint expression with a string result)
+          * - Message format (string)
+          * - Schema (optional, if the format supports it)
+          */
+
+        if (engine_args.size() < 3 || engine_args.size() > 6)
+            throw Exception(
+                "Storage Kafka requires 3-6 parameters"
+                " - Kafka broker list, list of topics to consume, consumer group ID, message format, schema, number of consumers",
+                ErrorCodes::NUMBER_OF_ARGUMENTS_DOESNT_MATCH);
+
+        String brokers;
+        auto ast = typeid_cast<const ASTLiteral *>(engine_args[0].get());
+        if (ast && ast->value.getType() == Field::Types::String)
+            brokers = safeGet<String>(ast->value);
+        else
+            throw Exception(String("Kafka broker list must be a string"), ErrorCodes::BAD_ARGUMENTS);
+
+        engine_args[1] = evaluateConstantExpressionAsLiteral(engine_args[1], args.local_context);
+        engine_args[2] = evaluateConstantExpressionOrIdentifierAsLiteral(engine_args[2], args.local_context);
+        engine_args[3] = evaluateConstantExpressionOrIdentifierAsLiteral(engine_args[3], args.local_context);
+
+        // Parse format schema if supported (optional)
+        String schema;
+        if (engine_args.size() >= 5)
+        {
+            engine_args[4] = evaluateConstantExpressionOrIdentifierAsLiteral(engine_args[4], args.local_context);
+
+            auto ast = typeid_cast<const ASTLiteral *>(engine_args[4].get());
+            if (ast && ast->value.getType() == Field::Types::String)
+                schema = safeGet<String>(ast->value);
+            else
+                throw Exception("Format schema must be a string", ErrorCodes::BAD_ARGUMENTS);
+        }
+
+        // Parse number of consumers (optional)
+        UInt64 num_consumers = 1;
+        if (engine_args.size() >= 6)
+        {
+            auto ast = typeid_cast<const ASTLiteral *>(engine_args[5].get());
+            if (ast && ast->value.getType() == Field::Types::UInt64)
+                num_consumers = safeGet<UInt64>(ast->value);
+            else
+                throw Exception("Number of consumers must be a positive integer", ErrorCodes::BAD_ARGUMENTS);
+        }
+
+        // Parse topic list and consumer group
+        Names topics;
+        topics.push_back(static_cast<const ASTLiteral &>(*engine_args[1]).value.safeGet<String>());
+        String group = static_cast<const ASTLiteral &>(*engine_args[2]).value.safeGet<String>();
+
+        // Parse format from string
+        String format;
+        ast = typeid_cast<const ASTLiteral *>(engine_args[3].get());
+        if (ast && ast->value.getType() == Field::Types::String)
+            format = safeGet<String>(ast->value);
+        else
+            throw Exception("Format must be a string", ErrorCodes::BAD_ARGUMENTS);
+
+        return StorageKafka::create(
+            args.table_name, args.database_name, args.context, args.columns,
+            args.materialized_columns, args.alias_columns, args.column_defaults,
+            brokers, group, topics, format, schema, num_consumers);
+    });
 }
 
 

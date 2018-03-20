@@ -29,6 +29,7 @@
 #include <DataStreams/MaterializingBlockOutputStream.h>
 #include <DataStreams/FormatFactory.h>
 #include <DataStreams/SquashingBlockOutputStream.h>
+#include <DataStreams/OpentsdbJSONBlockInputStream.h>
 #include <DataTypes/FormatSettingsJSON.h>
 #if USE_CAPNP
 #include <DataStreams/CapnProtoRowInputStream.h>
@@ -96,6 +97,10 @@ BlockInputStreamPtr FormatFactory::getInput(const String & name, ReadBuffer & bu
     else if (name == "JSONEachRow")
     {
         return wrap_row_stream(std::make_shared<JSONEachRowRowInputStream>(buf, sample, settings.input_format_skip_unknown_fields));
+    }
+    else if (name == "OpentsdbJSON")
+    {
+        return std::make_shared<OpentsdbJSONBlockInputStream>(buf, context);
     }
 #if USE_CAPNP
     else if (name == "CapnProto")

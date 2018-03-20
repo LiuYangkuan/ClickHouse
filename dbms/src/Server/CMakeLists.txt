@@ -20,6 +20,7 @@ add_library (clickhouse-server-lib
     MetricsTransmitter.cpp
     NotFoundHandler.cpp
     PingRequestHandler.cpp
+    OpentsdbRequestHandler.cpp
     ReplicasStatusHandler.cpp
     RootRequestHandler.cpp
     Server.cpp

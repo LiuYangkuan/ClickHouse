@@ -9,6 +9,7 @@
 #include "InterserverIOHTTPHandler.h"
 #include "NotFoundHandler.h"
 #include "PingRequestHandler.h"
+#include "OpentsdbRequestHandler.h"
 #include "ReplicasStatusHandler.h"
 #include "RootRequestHandler.h"
 
@@ -48,10 +49,18 @@ public:
                 return new RootRequestHandler(server);
             if (uri == "/ping")
                 return new PingRequestHandler(server);
+            if (startsWith(uri,"/api/suggest"))
+                return new OpentsdbSuggestRequestHandler(server);
             else if (startsWith(uri, "/replicas_status"))
                 return new ReplicasStatusHandler(server.context());
         }
-
+        if (request.getMethod() == Poco::Net::HTTPRequest::HTTP_POST && startsWith(uri,"/api") )
+        {
+            if (startsWith(uri,"/api/put"))
+                return new OpentsdbPutRequestHandler(server);
+            if (startsWith(uri,"/api/query"))
+                return new OpentsdbQueryRequestHandler(server);
+        }
         if (uri.find('?') != std::string::npos || request.getMethod() == Poco::Net::HTTPRequest::HTTP_POST)
         {
             return new HandlerType(server);

@@ -145,17 +145,12 @@ void OpentsdbPutRequestHandler::handleRequest(
 
         std::istream & istr = request.stream();
         ReadBufferPtr in_post_raw = std::make_unique<ReadBufferFromIStream>(istr);
-        //char tmp[128];
-        //istr.get(tmp, 128);
-        //String istr_string(tmp);
-        //ReadBufferPtr in_post_raw = std::make_unique<ReadBufferFromString>(istr_string);
-        //const String format_name = "CSV";
         const String format_name = "OpentsdbJSON";
         size_t max_block_size = 1;
 
         BlockInputStreamPtr in = context.getInputFormat(format_name, *in_post_raw, block_io.out->getHeader(), max_block_size);
         copyData(*in, *block_io.out);
-        const char * data = "OK";//istr_string.data();
+        const char * data = "204";
         response.sendBuffer(data, strlen(data));
     }
     catch (...)

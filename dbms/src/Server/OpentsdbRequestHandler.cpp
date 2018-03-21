@@ -98,13 +98,13 @@ void OpentsdbSuggestRequestHandler::handleRequest(
         //make a sql 
         std::string sql;
         if (type == "metrics"){
-            sql="select distinct metric from default.metrics where metric like '" + q + "%' limit " + max;
+            sql="select distinct metric from opentsdb.metrics where metric like '" + q + "%' limit " + max;
         }
         else if (type == "tagv"){
-            sql="need join two tables";
+            sql="select ";
         }
         else if (type == "tagk"){
-            sql="select distinct tag_key from default.metrics where tag_key like '" + q + "%' limit " + max;
+            sql="select distinct tagk from opentsdb.metrics where tagk like '" + q + "%' limit " + max;
         }
         else
         {
@@ -122,7 +122,8 @@ void OpentsdbSuggestRequestHandler::handleRequest(
         
         WriteBufferPtr out_buf = std::make_shared<WriteBufferFromHTTPServerResponse>(
             request, response, 10);
-        BlockOutputStreamPtr out = context.getOutputFormat(context.getDefaultFormat(), *out_buf, res.in->getHeader());
+        BlockOutputStreamPtr out = context.getOutputFormat("OpentsdbSuggest", *out_buf, res.in->getHeader());
+        //BlockOutputStreamPtr out = context.getOutputFormat(context.getDefaultFormat(), *out_buf, res.in->getHeader());
         copyData(*res.in, *out);
     }
     catch (...)

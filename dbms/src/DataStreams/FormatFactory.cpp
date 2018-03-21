@@ -30,6 +30,7 @@
 #include <DataStreams/FormatFactory.h>
 #include <DataStreams/SquashingBlockOutputStream.h>
 #include <DataStreams/OpentsdbJSONBlockInputStream.h>
+#include <DataStreams/OpentsdbSuggestRowOutputStream.h>
 #include <DataTypes/FormatSettingsJSON.h>
 #if USE_CAPNP
 #include <DataStreams/CapnProtoRowInputStream.h>
@@ -206,6 +207,8 @@ static BlockOutputStreamPtr getOutputImpl(const String & name, WriteBuffer & buf
         return std::make_shared<ODBCDriverBlockOutputStream>(buf, sample);
     else if (name == "Null")
         return std::make_shared<NullBlockOutputStream>(sample);
+    else if (name == "OpentsdbSuggest")
+        return std::make_shared<BlockOutputStreamFromRowOutputStream>(std::make_shared<OpentsdbSuggestRowOutputStream>(buf), sample);
     else
         throw Exception("Unknown format " + name, ErrorCodes::UNKNOWN_FORMAT);
 }

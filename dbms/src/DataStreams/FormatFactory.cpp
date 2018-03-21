@@ -209,6 +209,8 @@ static BlockOutputStreamPtr getOutputImpl(const String & name, WriteBuffer & buf
         return std::make_shared<NullBlockOutputStream>(sample);
     else if (name == "OpentsdbSuggest")
         return std::make_shared<BlockOutputStreamFromRowOutputStream>(std::make_shared<OpentsdbSuggestRowOutputStream>(buf), sample);
+    else if (name == "OpentsdbJSON")
+        return std::make_shared<BlockOutputStreamFromRowOutputStream>(std::make_shared<OpentsdbSuggestRowOutputStream>(buf), sample);
     else
         throw Exception("Unknown format " + name, ErrorCodes::UNKNOWN_FORMAT);
 }

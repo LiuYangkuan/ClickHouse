@@ -171,37 +171,66 @@ void OpentsdbQueryRequestHandler::handleRequest(
         std::unique_ptr<ReadBuffer> in_post_raw = std::make_unique<ReadBufferFromIStream>(istr);
         if (in_post_raw->buffer().size() == 0)
             in_post_raw->next();
-        const char * begin;
-        const char * end;
-        begin = in_post_raw->position();
-        end = in_post_raw->buffer().end();
-        String rqst_body = String(begin, end);
+        String rqst_body = String(in_post_raw->position(), in_post_raw->buffer().end());
         //parse json string
         Parser parser;
         Var result;
         result = parser.parse(rqst_body);
         //Query query(result);
-        Poco::DynamicStruct ds = *result.extract<Object::Ptr>();
+        Object::Ptr object = result.extract<Object::Ptr>();
         //required
-        if (ds["start"].isEmpty() || ds["queries"].isEmpty())
+        if ( object->get("start").isEmpty() || object->get("queries").isEmpty())
         {
             const char * data = "lack of required params\n";
             response.sendBuffer(data, strlen(data));
         }
         else
         {   
-            int start = 0;
-            if (ds["start"].isNumeric())
-            {
-                start = ds["start"];
-                std::cout << start << std::endl;
+            Var vstart = object->get("start");
+            uint64_t start = 0;
+            if (vstart.isNumeric())
+                start = vstart;
+            else if (vstart.isString())
+            {//TODO 1h-ago or 5m-ago
+                String str_start = vstart;
+                sscanf(str_start.data(), "%lu", &start);
             }
-            for (size_t i = 0 ; i < ds["queries"].size(); i++)
+
+            Var vend = object->get("end");
+            uint64_t end = 9999999999;
+            if (!vend.isEmpty() && vend.isNumeric())
+                end = vend;
+            else if (!vend.isEmpty() && vend.isString())
             {
-                String ag = ds["queries"][i]["aggregator"];
-                String metric = ds["queries"][i]["metric"];
-                std::cout << ag << ":" << metric << std::endl;
+                String str_end = vend;
+                sscanf(str_end.data(), "%lu", &end);
             }
+
+            Poco::JSON::Array::Ptr queries_arr = object->getArray("queries");
+            for ( auto & query : *queries_arr)
+            {
+                Object::Ptr sub_obj_query = query.extract<Object::Ptr>();
+                String agg = sub_obj_query->get("aggregator");
+                String metric = sub_obj_query->get("metric");
+                Object::Ptr sub_obj_tags = sub_obj_query->getObject("tags");
+                for (Object::Iterator it_tag = sub_obj_tags->begin(); it_tag != sub_obj_tags->end(); it_tag++)
+                {
+                    std::cout << "metric:" << metric << "\taggregator:" << agg << "tag:" 
+                        << it_tag->first << ":" << it_tag->second.convert<String>() << std::endl;
+                }
+            }
+            String sql = "select * from opentsdb.all_data";
+            
+            ParserQuery parser(&*sql.end());
+            ASTPtr ast = parseQuery(parser, sql, "");
+            Context context = server.context();
+            auto interpreter = InterpreterFactory::get(ast, context, QueryProcessingStage::Complete);
+            BlockIO res = interpreter->execute();
+        
+            WriteBufferPtr out_buf = std::make_shared<WriteBufferFromHTTPServerResponse>(
+                request, response, 10);
+            BlockOutputStreamPtr out = context.getOutputFormat("OpentsdbJSON", *out_buf, res.in->getHeader());
+            copyData(*res.in, *out);
         }
         //optional
     }

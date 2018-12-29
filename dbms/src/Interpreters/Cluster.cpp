@@ -29,7 +29,7 @@ namespace
 /// Default shard weight.
 static constexpr UInt32 default_weight = 1;
 
-inline bool isLocal(const Cluster::Address & address, const Poco::Net::SocketAddress & resolved_address, UInt16 clickhouse_port)
+inline bool isLocal(const Cluster::Address & address, const Poco::Net::SocketAddress & resolved_address, UInt16 clickhouse_port, Poco::Util::AbstractConfiguration & config)
 {
     ///    If there is replica, for which:
     /// - its port is the same that the server is listening;
@@ -41,7 +41,8 @@ inline bool isLocal(const Cluster::Address & address, const Poco::Net::SocketAdd
     /// Also, replica is considered non-local, if it has default database set
     ///  (only reason is to avoid query rewrite).
 
-    return address.default_database.empty() && isLocalAddress(resolved_address, clickhouse_port);
+    bool ret1 = address.default_database.empty() && address.port == clickhouse_port && config.getString("interserver_http_host").compare(address.host_name) == 0;
+    return ret1 || (address.default_database.empty() && isLocalAddress(resolved_address, clickhouse_port));
 }
 
 }
@@ -58,13 +59,13 @@ Cluster::Address::Address(Poco::Util::AbstractConfiguration & config, const Stri
     password = config.getString(config_prefix + ".password", "");
     default_database = config.getString(config_prefix + ".default_database", "");
     initially_resolved_address = DNSResolver::instance().resolveAddress(host_name, port);
-    is_local = isLocal(*this, initially_resolved_address, clickhouse_port);
+    is_local = isLocal(*this, initially_resolved_address, clickhouse_port, config);
     secure = config.getBool(config_prefix + ".secure", false) ? Protocol::Secure::Enable : Protocol::Secure::Disable;
     compression = config.getBool(config_prefix + ".compression", true) ? Protocol::Compression::Enable : Protocol::Compression::Disable;
 }
 
 
-Cluster::Address::Address(const String & host_port_, const String & user_, const String & password_, UInt16 clickhouse_port)
+Cluster::Address::Address(const String & host_port_, const String & user_, const String & password_, UInt16 clickhouse_port, Poco::Util::AbstractConfiguration & config)
     : user(user_), password(password_)
 {
     auto parsed_host_port = parseAddress(host_port_, clickhouse_port);
@@ -72,7 +73,7 @@ Cluster::Address::Address(const String & host_port_, const String & user_, const
     port = parsed_host_port.second;
 
     initially_resolved_address = DNSResolver::instance().resolveAddress(parsed_host_port.first, parsed_host_port.second);
-    is_local = isLocal(*this, initially_resolved_address, clickhouse_port);
+    is_local = isLocal(*this, initially_resolved_address, clickhouse_port, config);
 }
 
 
@@ -316,7 +317,7 @@ Cluster::Cluster(Poco::Util::AbstractConfiguration & config, const Settings & se
 
 
 Cluster::Cluster(const Settings & settings, const std::vector<std::vector<String>> & names,
-                 const String & username, const String & password, UInt16 clickhouse_port, bool treat_local_as_remote)
+                 const String & username, const String & password, UInt16 clickhouse_port, bool treat_local_as_remote, Poco::Util::AbstractConfiguration & config)
 {
     UInt32 current_shard_num = 1;
 
@@ -324,7 +325,7 @@ Cluster::Cluster(const Settings & settings, const std::vector<std::vector<String
     {
         Addresses current;
         for (auto & replica : shard)
-            current.emplace_back(replica, username, password, clickhouse_port);
+            current.emplace_back(replica, username, password, clickhouse_port, config);
 
         addresses_with_failover.emplace_back(current);
 

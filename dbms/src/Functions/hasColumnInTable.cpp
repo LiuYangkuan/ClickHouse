@@ -126,7 +126,7 @@ void FunctionHasColumnInTable::executeImpl(Block & block, const ColumnNumbers & 
             !user_name.empty() ? user_name : "default",
             password,
             global_context.getTCPPort(),
-            false);
+            false, global_context.getConfigRef());
 
         auto remote_columns = getStructureOfRemoteTable(*cluster, database_name, table_name, global_context);
         has_column = remote_columns.hasPhysical(column_name);

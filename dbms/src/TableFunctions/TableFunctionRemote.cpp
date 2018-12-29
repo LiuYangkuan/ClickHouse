@@ -155,7 +155,7 @@ StoragePtr TableFunctionRemote::executeImpl(const ASTPtr & ast_function, const C
         if (names.empty())
             throw Exception("Shard list is empty after parsing first argument", ErrorCodes::BAD_ARGUMENTS);
 
-        cluster = std::make_shared<Cluster>(context.getSettings(), names, username, password, context.getTCPPort(), false);
+        cluster = std::make_shared<Cluster>(context.getSettings(), names, username, password, context.getTCPPort(), false, context.getConfigRef());
     }
 
     auto structure_remote_table = getStructureOfRemoteTable(*cluster, remote_database, remote_table, context, remote_table_function_ptr);

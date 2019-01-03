@@ -24,6 +24,7 @@ void registerFunctionRange(FunctionFactory &);
 void registerFunctionsEmptyArray(FunctionFactory &);
 void registerFunctionEmptyArrayToSingle(FunctionFactory &);
 void registerFunctionArrayEnumerate(FunctionFactory &);
+void registerFunctionArrayInterPolation(FunctionFactory &);
 void registerFunctionArrayEnumerateUniq(FunctionFactory &);
 void registerFunctionArrayEnumerateDense(FunctionFactory &);
 void registerFunctionArrayUniq(FunctionFactory &);
@@ -52,6 +53,7 @@ void registerFunctionsArray(FunctionFactory & factory)
     registerFunctionsEmptyArray(factory);
     registerFunctionEmptyArrayToSingle(factory);
     registerFunctionArrayEnumerate(factory);
+    registerFunctionArrayInterPolation(factory);
     registerFunctionArrayEnumerateUniq(factory);
     registerFunctionArrayEnumerateDense(factory);
     registerFunctionArrayUniq(factory);

@@ -17,15 +17,14 @@ namespace ErrorCodes
     extern const int ILLEGAL_TYPE_OF_ARGUMENT;
 }
 
-/// arrayEnumerate(arr) - Returns the array [1,2,3,..., length(arr)]
-class FunctionArrayInterPolation : public IFunction
+class FunctionArrayInterPolationRate : public IFunction
 {
 public:
-    static constexpr auto name = "arrayInterPolation";
+    static constexpr auto name = "arrayInterPolationRate";
 
     static FunctionPtr create(const Context &)
     {
-        return std::make_shared<FunctionArrayInterPolation>();
+        return std::make_shared<FunctionArrayInterPolationRate>();
     }
 
     String getName() const override
@@ -119,7 +118,14 @@ public:
                     UInt64 ts = array_ts->getData()[j].get<UInt64>();
                     Float64 inc = 0.0, rate = 0.0;
                     UInt64 step = 0;
-
+                    if (j == prev_off) {
+                        res_ts.push_back(ts);
+			res_val.push_back(NAN);
+			res_flag.push_back(1);
+			item_count++;
+			curr_ts += downsample;
+			continue;
+                    }
                     if (j > prev_off) {
                         inc = array_val->getData()[j].get<Float64>() - array_val->getData()[j-1].get<Float64>();
                         step = array_ts->getData()[j].get<UInt64>() - array_ts->getData()[j-1].get<UInt64>();
@@ -128,11 +134,11 @@ public:
                     while (curr_ts <= ts) {
                         if (curr_ts < ts){
                             res_flag.push_back(0);
-                            res_val.push_back(res_val[idx-1] + rate * downsample);
+                            res_val.push_back(rate);
                         }
                         else {
                             res_flag.push_back(1);
-                            res_val.push_back(array_val->getData()[j].get<Float64>());
+                            res_val.push_back(rate);
                         }
                         res_ts.push_back(curr_ts);
                         curr_ts += downsample;
@@ -177,9 +183,9 @@ public:
 };
 
 
-void registerFunctionArrayInterPolation(FunctionFactory & factory)
+void registerFunctionArrayInterPolationRate(FunctionFactory & factory)
 {
-    factory.registerFunction<FunctionArrayInterPolation>();
+    factory.registerFunction<FunctionArrayInterPolationRate>();
 }
 
 }

@@ -36,6 +36,7 @@ void registerAggregateFunctionCombinatorNull(AggregateFunctionCombinatorFactory 
 
 void registerAggregateFunctionHistogram(AggregateFunctionFactory & factory);
 void registerAggregateFunctionRetention(AggregateFunctionFactory & factory);
+void registerAggregateFunctionTSgroupSum(AggregateFunctionFactory & factory);
 
 void registerAggregateFunctions()
 {

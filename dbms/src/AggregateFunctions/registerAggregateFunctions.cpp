@@ -37,6 +37,7 @@ void registerAggregateFunctionCombinatorNull(AggregateFunctionCombinatorFactory 
 void registerAggregateFunctionHistogram(AggregateFunctionFactory & factory);
 void registerAggregateFunctionRetention(AggregateFunctionFactory & factory);
 void registerAggregateFunctionTSgroupSum(AggregateFunctionFactory & factory);
+void registerAggregateFunctionTSgroupRateSum(AggregateFunctionFactory & factory);
 
 void registerAggregateFunctions()
 {
@@ -64,6 +65,8 @@ void registerAggregateFunctions()
         registerAggregateFunctionsMaxIntersections(factory);
         registerAggregateFunctionHistogram(factory);
         registerAggregateFunctionRetention(factory);
+        registerAggregateFunctionTSgroupSum(factory);
+        registerAggregateFunctionTSgroupRateSum(factory);
     }
 
     {

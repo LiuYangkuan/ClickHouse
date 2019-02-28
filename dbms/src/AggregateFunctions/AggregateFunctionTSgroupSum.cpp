@@ -24,7 +24,7 @@ AggregateFunctionPtr createAggregateFunctionTSgroupSum(const std::string & name,
 
 void registerAggregateFunctionTSgroupSum(AggregateFunctionFactory & factory)
 {
-    factory.registerFunction("retention", createAggregateFunctionTSgroupSum, AggregateFunctionFactory::CaseInsensitive);
+    factory.registerFunction("TSgroupSum", createAggregateFunctionTSgroupSum, AggregateFunctionFactory::CaseInsensitive);
 }
 
 }
